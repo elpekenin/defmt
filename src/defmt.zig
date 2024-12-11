@@ -1,7 +1,6 @@
 //! Deferred formatting in zig
 
 // TODO: Some mechanism to detect out-of-sync between MCU and host ELFs
-// TODO: Log levels (emit a u2 as part of the message?)
 
 const std = @import("std");
 const Level = std.log.Level;
@@ -18,13 +17,17 @@ comptime {
 
 const endianness: std.builtin.Endian = .little;
 
-/// symbols provided by linker script
-/// by using them we also make sure that the relevant section was added
+/// These are provided by linker script
+/// By referencing them, we also make sure that the relevant section was added
 /// ```ld
-/// PROVIDE_HIDDEN (__defmt_start = .);
-/// KEEP (*(.defmt))
-/// PROVIDE_HIDDEN (__defmt_end = .);
+/// .defmt : {
+///   PROVIDE_HIDDEN (__defmt_start = .);
+///   KEEP (*(.defmt))
+///   PROVIDE_HIDDEN (__defmt_end = .);
+/// }
 /// ```
+/// NOTE: Im no linker expert but im pretty sure we dont need a custom section (for now?)
+/// for the stuff we do... However it will make it easier to find stuff (eg: objdump | grep defmt)
 const symbols = struct {
     extern var __defmt_start: anyopaque;
     extern var __defmt_end: anyopaque;
@@ -34,12 +37,13 @@ const symbols = struct {
 /// name: the format string. We can't do that with stack variables.
 ///
 /// It is a u8 and not a u0 -despite its value being useless- so that each
-/// symbol has a different address (ie: they be told apart)
+/// symbol has a different address (ie: they can be told apart)
 ///
 /// Returns an identifier for the symbol
 fn idForFmt(comptime fmt: []const u8) u14 {
     const Dummy = struct {
         /// Make it depend on fmt so that each `Dummy` is a different type.
+        /// Otherwise, `dummy` is always the same thing.
         const foo = fmt;
 
         /// Dont waste time initializing, we will never use the variable :)
