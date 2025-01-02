@@ -64,7 +64,7 @@ fn idForFmt(comptime fmt: []const u8) u14 {
 
 /// Given a number, return the smallest multiple of 8 >= to it
 /// This is: find the smallest number of bytes capable of representing this bitwidth.
-/// eg: if we receive a 10 (10 bits), we will retun u16 (2 bytes).
+/// eg: if we receive a 10 (10 bits), we will return 16 (2 bytes).
 fn roundUp(bits: u16) u16 {
     const size = std.mem.byte_size_in_bits;
     const bytes = (bits + size - 1) / size;
@@ -85,8 +85,8 @@ fn log(comptime level: Level, writer: std.io.AnyWriter, comptime fmt: []const u8
     const id = idForFmt(fmt);
 
     // level (debug, info, warn, error) is represented as u2
-    // string identifier is little-endian u14 (2 ** 14 levels sounds good enough)
-    const header: u16 = (@as(u16, @intFromEnum(level)) << 14) | id; 
+    // string identifier is u14 (2 ** 14 strings sounds like enough room for a lifetime)
+    const header: u16 = (@as(u16, @intFromEnum(level)) << 14) | id;
     try writer.writeInt(u16, header, .little);
 
     // send arguments
@@ -109,7 +109,7 @@ fn log(comptime level: Level, writer: std.io.AnyWriter, comptime fmt: []const u8
         switch (TInfo) {
             .array => return error.NotYetImplemented,
             .bool => {
-                // bool is probably represented by single-bit representation internally
+                // bool is probably represented by a single bit internally
                 // lets make it a whole byte to be sure about its representation over the wire
                 try writer.writeInt(u8, @intFromBool(value), endianness);
             },
@@ -127,7 +127,7 @@ fn log(comptime level: Level, writer: std.io.AnyWriter, comptime fmt: []const u8
                     },
                 });
 
-                // since Int's bitsize is >= to original type, it can coerce safely
+                // since Int's bitsize is >= to original type, it can coerce
                 try writer.writeInt(Int, value, endianness);
             },
             .float => return error.MaybeLater,
@@ -160,7 +160,7 @@ pub const Logger = struct {
     const Self = @This();
 
     writer: std.io.AnyWriter,
-   
+
     pub fn err(self: *const Self, comptime fmt: []const u8, args: anytype) !void {
         return defmt.err(self.writer, fmt, args);
     }
