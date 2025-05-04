@@ -6,7 +6,7 @@ const std = @import("std");
 const Level = std.log.Level;
 const Type = std.builtin.Type;
 
-const defmt = @This();
+const inspect = @import("inspect.zig");
 
 comptime {
     if (@TypeOf(@intFromEnum(Level.err)) != u2) {
@@ -41,16 +41,16 @@ const symbols = struct {
 ///
 /// Returns an identifier for the symbol
 fn idForFmt(comptime fmt: []const u8) u14 {
-    const Dummy = struct {
-        /// Make it depend on fmt so that each `Dummy` is a different type.
-        /// Otherwise, `dummy` is always the same thing.
+    const DummyType = struct {
+        /// Make type depend on `fmt` so that each one call produces a new different type.
+        /// Otherwise, `dummy_var` will always be the same thing due to memoization.
         const foo = fmt;
 
         /// Dont waste time initializing, we will never use the variable :)
-        const dummy: u8 = undefined;
+        const dummy_var: u8 = undefined;
     };
 
-    const ptr = &Dummy.dummy;
+    const ptr = &DummyType.dummy_var;
 
     // Apparently, if the exact same format string is used in several
     // places, they "land" on the same symbol.
@@ -62,8 +62,8 @@ fn idForFmt(comptime fmt: []const u8) u14 {
     return @intCast(@intFromPtr(ptr) - @intFromPtr(&symbols.__defmt_start));
 }
 
-/// Given a number, return the smallest multiple of 8 >= to it
-/// This is: find the smallest number of bytes capable of representing this bitwidth.
+/// Given a number, return the smallest multiple of 8 bigger than it
+/// This is used to find the smallest number of bytes capable of representing a bitwidth.
 /// eg: if we receive a 10 (10 bits), we will return 16 (2 bytes).
 fn roundUp(bits: u16) u16 {
     const size = std.mem.byte_size_in_bits;
@@ -80,7 +80,22 @@ fn enabledFor(level: Level) bool {
 
 fn log(comptime level: Level, writer: std.io.AnyWriter, comptime fmt: []const u8, args: anytype) !void {
     // this level of logging is disabled
-    if (!comptime enabledFor(level)) return;
+    if (!comptime enabledFor(level)) {
+        return;
+    }
+
+    // check if format and args are valid
+    const tokens = comptime inspect.validate(fmt, args) catch |e| {
+        const msg = switch (e) {
+            error.ExtraArgs => "Too many arguments to be logged with the given format",
+            error.InvalidFmt => "Format string is invalid",
+            error.MissingArgs => "Too few arguments to be logged with the given format",
+            error.NotStruct => "Arguments to be logged must be placed in a struct",
+            error.TooManyArgs => "Amount of arguments to be printed exceeds implementation limit",
+            error.TypeMismatch => "The type of one argument is not compatible with its designated specifier",
+        };
+        @compileError(msg);
+    };
 
     const id = idForFmt(fmt);
 
@@ -89,40 +104,30 @@ fn log(comptime level: Level, writer: std.io.AnyWriter, comptime fmt: []const u8
     const header: u16 = (@as(u16, @intFromEnum(level)) << 14) | id;
     try writer.writeInt(u16, header, .little);
 
-    // send arguments
-    const A = @TypeOf(args);
-    const AInfo = @typeInfo(A);
-
-    if (AInfo != .@"struct") {
-        const msg = "Expected a struct as argument to print";
-        @compileError(msg);
-    }
-
-    inline for (AInfo.@"struct".fields) |field| {
-        const T = field.type;
-        const TInfo = @typeInfo(T);
-
+    // send args
+    const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+    inline for (tokens, fields) |token, field| {
         const value = @field(args, field.name);
 
-        // TODO: some signaling of the type sent
-        // eg: how would we tell apart a u8 from a u16 when receiving data on the host?
-        switch (TInfo) {
-            .array => return error.NotYetImplemented,
-            .bool => {
-                // bool is probably represented by a single bit internally
-                // lets make it a whole byte to be sure about its representation over the wire
-                try writer.writeInt(u8, @intFromBool(value), endianness);
+        switch (token) {
+            // TODO: pack bools into a bitmask
+            // bool is probably represented by a single bit internally
+            // lets make it a whole byte to be sure about its representation over the wire
+            .boolean => {
+                try writer.writeByte(@intFromBool(value));
             },
-            .int => |int_info| {
-                const bits = comptime roundUp(int_info.bits);
-                if (bits > 8) {
-                    const msg = "Integers bigger than a byte not supported yet";
-                    @compileError(msg);
-                }
+            .char => {
+                try writer.writeByte(value);
+            },
+            // TODO: implement some sort of identification for the type length
+            //       right now, host couldn't know if value is u8(consume 1 byte) or u64(8)
+            .integer => {
+                const i = @typeInfo(field.type).int;
+                const bits = comptime roundUp(i.bits);
 
                 const Int = @Type(Type{
                     .int = .{
-                        .signedness = int_info.signedness,
+                        .signedness = i.signedness,
                         .bits = bits,
                     },
                 });
@@ -130,11 +135,18 @@ fn log(comptime level: Level, writer: std.io.AnyWriter, comptime fmt: []const u8
                 // since Int's bitsize is >= to original type, it can coerce
                 try writer.writeInt(Int, value, endianness);
             },
-            .float => return error.MaybeLater,
-            else => {
-                const msg = "Printing type '" ++ @typeName(T) ++ "' is not supported at the moment.";
-                @compileError(msg);
+            .pointer => {
+                try writer.writeInt(usize, value, endianness);
             },
+            .scientific => unreachable, // unimplemented
+            .string => {
+                try writer.writeAll(value);
+            },
+
+            // not sent over wire
+            .brace,
+            .text,
+            => {}, 
         }
     }
 }
@@ -161,6 +173,12 @@ pub const Logger = struct {
 
     writer: std.io.AnyWriter,
 
+    pub fn from(writer: std.io.AnyWriter) Self {
+        return .{
+            .writer = writer,
+        };
+    }
+
     pub fn err(self: *const Self, comptime fmt: []const u8, args: anytype) !void {
         return defmt.err(self.writer, fmt, args);
     }
@@ -177,3 +195,5 @@ pub const Logger = struct {
         return defmt.debug(self.writer, fmt, args);
     }
 };
+
+const defmt = @This();

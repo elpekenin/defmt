@@ -1,7 +1,8 @@
 .{
-    .name = "defmt",
+    .name = .defmt,
     .version = "0.0.0",
     .minimum_zig_version = "0.14.0",
+    .fingerprint = 0x6d0936fcfd0500e9,
 
     .dependencies = .{},
 
